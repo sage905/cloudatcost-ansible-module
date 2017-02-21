@@ -1,0 +1,551 @@
+#!/usr/bin/python
+# Custom Module to manage server instances in a CloudAtCost
+# (https://cloudatcost.com) Cloud
+# This module was originally based on the Ansible Linode module
+from collections import namedtuple
+
+DOCUMENTATION = '''
+---
+module: cloudatcost
+author: "Patrick Toal (@ptoal)"
+short_description: Create, Delete, Start, Stop, Restart or Update an instance at CloudAtCost
+description: >
+    Manage servers at CloudAtCost via the API:
+    U(https://github.com/cloudatcost/api)
+    An API user and key must be acquired per the Instructions in the API docs.
+
+options:
+  state:
+    description:
+     - Indicate desired state of the resource
+    choices: ['present', 'active', 'started', 'absent', 'deleted', 'stopped', 'restarted']
+    default: present
+  api_key:
+    description:
+     - CloudAtCost API key
+    default: null
+  api_user:
+    description:
+     - CloudAtCost API Username
+    default: null
+  label:
+    aliases: name
+    description:
+     - Label to give the instance (alphanumeric only.  No spaces, dashes, underscored)
+    default: null
+    type: string
+  fqdn:
+    description:
+     - Fully Qualified Domain-Name for Reverse DNS setup
+    default: null
+    type: string
+  server_id:
+    description:
+     - Unique ID of a CloudAtCost server (optional)
+    aliases: sid
+    default: null
+    type: integer
+  cpus:
+    description:
+     - Number of vCPUs (1-16) to allocate to this instance
+    default: 1
+    type: integer
+    choices: [1-16]
+  ram:
+    description:
+     - Amount of RAM to allocate to this instance (MB)
+    default: 1024
+    type: integer
+    choices: [1024, 2048, 3072, 4096, 6144, 7168, 8192, 12288, 16384, 20480, 24576, 28672, 32768]
+  storage:
+    description:
+     - Amount of Disk Storage to allocate to this instance (GB)
+    default: 10
+    choices: [10 - 1000]
+  template_id:
+    description:
+     - Operating System to use for the instance (must be a #id or text description from /v1/listtemplates.php)
+    # Default of 26 is for CentOS 7 x64
+    default: 26
+    type: integer
+  runmode:
+    description:
+    - The `safe` runmode will automatically shutdown the server after 7 days.  `Normal` will not auto-shutdown the server
+    default: safe
+    type: string
+    choices: ["safe", "normal"]
+  wait:
+    description:
+     - wait for the instance to be in state 'running' before returning
+    default: "yes"
+    choices: [ "yes", "no" ]
+  wait_timeout:
+    description:
+     - how long before wait gives up, in seconds
+    # 15min default.  When CloudAtCost is having problems, server provisioning can take DAYS.
+    default: 900
+requirements:
+    - "python >= 2.6"
+    - "cacpy >= 0.5.3"
+    - "pycurl"
+notes:
+  - If I(server_id) is specified, it must match an existing server id.
+
+  - If I(server_id) is not specified, the first server in the account that
+    exactly matches I(label) is used.
+
+  - If C(state=present), the server will either be created or updated.
+
+  - Only the following attributes can be updated after creation:
+      - I(label) (Must provide server_id to change)
+      - I(fqdn)
+      - I(run_mode)
+      - I(state)
+
+  - If C(state in ('absent', 'deleted')), the server will be destroyed!  Use
+    with caution.
+
+  - CAC_API_KEY and CAC_API_USER environment variables can be used instead
+    of I(api_key) and I(api_user)
+'''
+
+EXAMPLES = '''
+---
+# Create a server
+- local_action:
+     module: cloudatcost
+     api_user: bob@smith.com
+     api_key: 'longStringFromCACApi'
+     label: cloudatcost-test1
+     cpus: 1
+     ram: 1024
+     storage: 10
+     template_id: 26
+     runmode: safe
+     wait: yes
+     wait_timeout: 3600
+     state: present
+
+# Ensure a running server (create if missing)
+- local_action:
+     module: cloudatcost
+     api_user: bob@smith.com
+     api_key: 'longStringFromLinodeApi'
+     label: cloudatcost-test1
+     cpus: 1
+     ram: 1024
+     storage: 10
+     template_id: 26
+     runmode: safe
+     wait: yes
+     wait_timeout: 3600
+     state: present
+
+# Delete a server
+- local_action:
+     module: cloudatcost
+     api_user: bob@smith.com
+     api_key: 'longStringFromLinodeApi'
+     sid: 12345678
+     label: cloudatcost-test1
+     state: absent
+
+# Stop a server
+- local_action:
+     module: cloudatcost
+     api_user: bob@smith.com
+     api_key: 'longStringFromLinodeApi'
+     label: cloudatcost-test1
+     state: stopped
+
+# Reboot a server
+- local_action:
+     module: cloudatcost
+     api_user: bob@smith.com
+     api_key: 'longStringFromLinodeApi'
+     label: cloudatcost-test1
+     state: restarted
+
+'''
+
+ANSIBLE_METADATA = {'status': ['preview'],
+                    'supported_by': 'community',
+                    'version': '1.0'}
+try:
+    import pycurl
+
+    HAS_PYCURL = True
+except ImportError:
+    HAS_PYCURL = False
+
+try:
+    from cacpy import CACPy
+
+    HAS_CAC = True
+except ImportError:
+    HAS_CAC = False
+
+
+    def get_template(api, lookup=None):
+        """Return a CACTemplate after querying the Cloudatcost API for a list of templates for a match.
+
+        Required Arguments:
+        lookup - Description or id to be matched
+
+        Raises:
+        LookupError if desc or template_id can't be found
+        ValueError if no lookup parameters are provided
+        """
+
+        if lookup is not None:
+            if isinstance(lookup, int):
+                lookup = str(lookup)
+            templates = api.get_template_info()['data']
+            try:
+                template = next(t for t in templates
+                                if t.get('ce_id') == lookup or t.get('name') == lookup)
+            except StopIteration:
+                raise LookupError("Template with ID or description: " + lookup + " was not found")
+            return CACTemplate(template.get('name'), template.get('ce_id'))
+        else:
+            raise ValueError("Must provide an id or description to lookup.")
+
+
+    def get_server(api, sid=None, label=None):
+        """
+        Use the CAC API to search for the provided sid or label
+        and return the first match found as a CACServer instance.
+
+        Returns None if no server found.
+        """
+        assert sid is not None or label is not None
+
+        try:
+            server = next(
+                server for server in api.get_server_info().get('data') if
+                server['sid'] == str(sid) or server['label'] == label)
+        except StopIteration:
+            return None
+
+        server['api'] = api
+        return CACServer(api, server)
+
+CACTemplate = namedtuple('CACTemplate', ['desc', 'template_id'])
+
+
+class CACServer(object):
+    """Represent a server instance at cloudatost.  Perform checking and validation
+    on attribute modification, to ensure valid state transitions before committing
+    to CloudAtCost API.
+    """
+
+    API_ATTRS = ('uid', 'servername', 'sdate', 'sid', 'panel_note', 'rootpass', 'ip', 'netmask', 'gateway',
+                      'servertype')
+    # Build Attributes are read-only after creation
+    BUILD_ATTRS = ('cpu', 'ram', 'storage', 'os')
+    MODIFYIABLE_ATTRS = ('label', 'rdns', 'status', 'mode')
+    USAGE_ATTRS = ('ramusage', 'cpuusage', 'hdusage')
+
+    # status = attr.ib(default=None)  # 'Powered On', 'Powered Off', 'Pending On'
+    # mode = attr.ib(default=None)  # 'Normal', 'Safe'
+    # template = attr.ib(default=None)
+
+    def __getattr__(self, item):
+        """
+        Get the modified value of the server attribute, or the existing value if not modified.
+
+        :raises AttributeError if attribute not found
+        """
+        val = getattr(self._updated_state, item, getattr(self._current_state, item, None))
+        if val is not None:
+            return val
+        else:
+            raise AttributeError(self.__class__ + ' has no attribute: ' + item)
+
+    def __setattr__(self, key, value):
+        if key in self.__class__.MODIFYIABLE_ATTRS:
+            return setattr(self._updated_state, key, value)
+        else:
+            raise AttributeError(self.__class__.__name__ + " does not have a modifiable attribute: " + key)
+
+    def __init__(self, api, server):
+        self.api = api
+        self._current_state = server
+        self._updated_state = {}
+
+        if server['template'] is not None:
+            self._current_state['template'] = get_template(api, server['template'])
+
+    def __repr__(self):
+        return ('{cls.__name__}(api_account={self.api.email}, sid={self.sid}, '
+                'label={self.label})').format(
+            cls=type(self), self=self)
+
+    def update(self):
+        # Only update existing records.
+        if self.sid is None:
+            raise AttributeError("Server update failed. sid property not set on CACServer object.")
+
+        current = self.api.get_server(sid=self.sid)
+
+        if current is None:
+            raise LookupError("Unable to find server with sid: " + str(self.sid))
+
+        changed_attrs = [attribute.name for attribute in attr.fields(self.__class__) if
+                         getattr(self, attribute.name) != getattr(current, attribute.name)]
+
+        modified_immutables = [a for a in changed_attrs if a not in self.__class__.MODIFYIABLE_ATTRS]
+
+        if len(modified_immutables) > 0:
+            raise AttributeError("(" + ", ".join(modified_immutables) + ") can not be changed in a built server.")
+
+    def delete(self):
+        self.api.server_delete(self.sid)
+
+
+def cac_servers(module, api, state, label, cpus, ram, storage, template_id,
+                server_id, runmode, fqdn,
+                wait, wait_timeout):
+    changed = False
+    jobs = []
+    action = None
+    result = {}
+    template_detail = None
+
+    # Steps:
+    # 1. Get existing server if it exists.
+    # 2. Create if not existing (Build)
+    # 3. Fail if any immutable values are specificed and different (cpus, ram, storage, template_id)
+    # 4. Complete available update operations:
+    #  . Update label (Rename)
+    #  . Update RDNS
+    #  . Update Run Mode
+    #  . Update Power State (Power Off, Power On, Reset)
+
+    server = api.get_server(server_id=server_id, label=label)
+
+    # Act on the state
+    if state in ('active', 'present', 'started'):
+
+        # Any create step triggers a job that need to be waited for.
+        if not server:
+            for arg in ('label', 'cpus', 'ram', 'storage', 'template_id'):
+                if not eval(arg):
+                    module.fail_json(
+                        msg='%s is required for active state' % arg)
+
+            # Create server entity
+            try:
+                # Check os template
+                for template in api.get_template_info()['data']:
+                    if template['ce_id'] == str(template_id):
+                        template_detail = template['name']
+                        break
+
+                if not template_detail:
+                    module.fail_json(
+                        msg='OS with id #%d is not an available template' %
+                            template_id)
+
+                res = api.server_build(cpus, ram, storage, template_id)
+
+                if res['status'] != 'ok' or res['result'] != 'successful':
+                    module.fail_json(msg="Server Creation Failed: " +
+                                         res['error_description'])
+                new_server = {}
+                for i in range(1, wait_timeout / 5):
+                    servers = api.get_server_info()
+                    for server in servers['data']:
+                        if server['servername'] == res['servername']:
+                            new_server = server
+                    if new_server != {}:
+                        break
+                    time.sleep(5)
+                if new_server == {}:
+                    module.fail_json(msg="Server Build Timed out: " +
+                                         res['error_description'])
+
+                server_id = new_server['id']
+                jobs.append(res['taskid'])
+
+                # Update Label to match label
+                api.rename_server(server_id, label)
+
+                action = "create"
+                changed = True
+
+            except Exception, e:
+                module.fail_json(msg='Exception during create: ' + e.message)
+
+        # Start / Ensure server is running
+        # Refresh server state
+        server = api.get_server(server_id=server_id)
+
+        # Ensure existing servers are up and running, boot if necessary
+        if server.status != 'Powered On':
+            res = api.power_on_server(server['id'])
+            jobs.append(res['taskid'])
+            changed = True
+
+        # wait here until the instances are up
+        wait_timeout = time.time() + wait_timeout
+        while wait and wait_timeout > time.time():
+            # refresh the server details
+            server = api.get_server(server_id=server['id'])
+            # status:
+            #  "Installing": OS being installed
+            #  "Powered On": System Running
+            #  "Powered Off": System Shut Down
+            #  "Pending On": System Powering Up/Down
+            if server['status'] in ("Powered On", "Failed"):
+                break
+            time.sleep(5)
+        if wait and wait_timeout <= time.time():
+            # waiting took too long
+            module.fail_json(msg='Timeout waiting on %s (id: %s)' %
+                                 (server['label'], server['id']))
+        # Get a fresh copy of the server details
+        server = api.get_server(server_id=server['id'])
+        if server['status'] != "Powered On":
+            module.fail_json(msg='%s (id: %s) failed to boot' %
+                                 (server['label'], server['is']))
+        # From now on we know the task is a success
+        result = server
+
+    elif state in ('stopped'):
+        for arg in ('label', 'server_id'):
+            if not eval(arg):
+                module.fail_json(msg='%s is required for active state' % arg)
+
+        if not server:
+            module.fail_json(msg='Server %s (id: %s) not found' %
+                                 (label, server_id))
+
+        if server['status'] == "Powered On":
+            try:
+                api.power_off_server(server_id)
+            except Exception, e:
+                module.fail_json(msg='%s' % e)
+            changed = True
+
+    elif state in ('restarted'):
+        for arg in ('label', 'server_id'):
+            if not eval(arg):
+                module.fail_json(msg='%s is required for active state' % arg)
+
+        if not server:
+            module.fail_json(
+                msg='Server %s (id: %s) not found' % (label, server_id))
+
+        try:
+            res = api.reset_server(server_id)
+        except Exception, e:
+            module.fail_json(msg='%s' % e)
+        changed = True
+
+    elif server and state in ('absent', 'deleted'):
+        try:
+            res = api.server_delete(server_id)
+            if res['status'] == 'ok':
+                action = "destroy"
+                server = None
+        except Exception, e:
+            module.fail_json(msg='%s' % e)
+        changed = True
+
+    if state not in ('absent', 'deleted'):
+        # Ensure Server Runmode is correct
+        if server['mode'].lower() != runmode:
+            res = api.set_run_mode(server_id, runmode)
+            if res['status'] == 'ok':
+                changed = True
+            else:
+                module.fail_json(msg='Unable to change runmode to: %s' %
+                                     runmode)
+        # Ensure Server Reverse DNS is correct
+        if fqdn and server['rdns'].lower() != fqdn:
+            res = api.change_hostname(server_id, fqdn)
+            if res['status'] == 'ok':
+                changed = True
+            else:
+                module.fail_json(msg='Unable to change Reverse DNS to: %s' %
+                                     runmode)
+
+    module.exit_json(changed=changed, jobs=jobs, server=result, action=action)
+
+
+def main():
+    module = AnsibleModule(
+        argument_spec=dict(
+            state=dict(default='present',
+                       choices=['active', 'present', 'started',
+                                'deleted', 'absent', 'stopped',
+                                'restarted']),
+            api_key=dict(),
+            api_user=dict(),
+            label=dict(type='str', aliases=['name']),
+            fqdn=dict(type='str'),
+            cpus=dict(type='int'),
+            ram=dict(type='int'),
+            storage=dict(type='int'),
+            template_id=dict(type='int'),
+            runmode=dict(type='str', default="safe"),
+            server_id=dict(type='int', aliases=['sid']),
+            wait=dict(type='bool', default=True),
+            wait_timeout=dict(default=300),
+        ),
+        supports_check_mode=True
+    )
+
+    if not HAS_PYCURL:
+        module.fail_json(msg='pycurl required for this module')
+    if not HAS_CAC:
+        module.fail_json(msg='CACPy required for this module')
+
+    state = module.params.get('state')
+    api_key = module.params.get('api_key')
+    api_user = module.params.get('api_user')
+    label = module.params.get('label')
+    fqdn = module.params.get('fqdn')
+    cpus = module.params.get('cpus')
+    ram = module.params.get('ram')
+    storage = module.params.get('storage')
+    template_id = module.params.get('template_id')
+    server_id = module.params.get('server_id')
+    runmode = module.params.get('runmode')
+    wait = module.params.get('wait')
+    wait_timeout = int(module.params.get('wait_timeout'))
+
+    # Setup the api_key and api_user
+    try:
+        if not api_key:
+            api_key = os.environ['CAC_API_KEY']
+        if not api_user:
+            api_user = os.environ['CAC_API_USER']
+    except KeyError, e:
+        module.fail_json(msg='Unable to load %s' % e.message)
+
+    # setup the auth
+    try:
+        api = CACPy(api_user, api_key)
+        api.get_resources()
+    except Exception, e:
+        return module.fail_json(msg='%s' % e.message)
+
+    cac_servers(module, api, state, label, cpus, ram, storage, template_id,
+                server_id, runmode, fqdn,
+                wait, wait_timeout)
+
+    # TODO IMPLEMENT
+    if module.check_mode:
+        # Check if any changes would be made but don't actually make those changes
+        module.exit_json(changed=check_if_system_state_would_be_changed())
+
+        # TODO ? Implement ansible_facts to provide things like root password?
+
+
+# import module snippets
+from ansible.module_utils.basic import *
+
+if __name__ == '__main__':
+    main()

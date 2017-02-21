@@ -1,0 +1,32 @@
+= cloudatcost-ansible-module
+
+These are additional, unofficial Ansible modules for managing servers at http://cloudatcost.com[CloudAtCost
+]
+
+== Installation
+
+=== In a virtualenv
+[bash]
+```
+ sudo pip install cloudatcost-ansible-module
+```
+=== Directly in playbook directory
+
+=== Dependencies
+This module depends on the https://github.com/adc4392/python-cloudatcost[python-cloudatcost] module.
+
+== API Authentication
+
+To use these modules, you must create an API key at the https://panel.cloudatcost.com[Cloudatcost Panel] as described
+ in the  in the https://github.com/cloudatcost/api[API documentation]
+
+You can use the api_key and api_user attributes of the server configuration, or use the CAC_API_KEY and CAC_API_USER
+environment variables, as so:
+
+[bash]
+```
+export CAC_API_KEY=apikeygeneratedbypanel
+export CAC_API_USER=username@domain.com
+```
+
+
