@@ -1,31 +1,44 @@
-import os
-from setuptools import setup
+import os, sys
+try:
+    from setuptools import setup, find_packages
+except ImportError:
+    print("cloudatcost_ansible_module needs setuptools in order to build. "
+          "Install it using your package manager (usually python-setuptools) "
+          "or via pip (pip install setuptools).")
+    sys.exit(1)
 
 here = os.path.abspath(os.path.dirname(__file__))
 
-with open(os.path.join(here, 'README.rst')) as f:
+with open(os.path.join(here, 'README.adoc')) as f:
     long_desc = f.read()
 
 setup(
-    name="cacpy",
-    version="0.5.3",
-    author="Andy Culler",
-    author_email="adc4392@gmail.com",
-    description=("A python wrapper for the cloudatcost.com API - "
-                 "https://github.com/cloudatcost/api"),
+    name="cloudatcost-ansible-module",
+    version="0.2.1",
+    author="Patrick Toal",
+    author_email="sage905@takeflight.ca",
+    description=("An Ansible module for managing servers at CloudAtCost  - "
+                 "http://cloudatcost.com"),
     license="MIT",
-    keywords="wrapper for cloud at cost api",
-    url="https://github.com/adc4392/python-cloudatcost",
-    download_url="https://github.com/adc4392/python-cloudatcost/tarball/0.5",
-    packages=['cacpy'],
+    keywords="ansible module cloud at cost api",
+    url="https://github.com/sage905/cloudatcost-ansible-module",
+    download_url="https://github.com/sage905/cloudatcost-ansible-module/tarball/master",
+    packages=find_packages(exclude=('tests',)),
     long_description=long_desc,
+    scripts=['cac_inv.py'],
     classifiers=[
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Libraries :: Python Modules",
-        "Programming Language :: Python :: 2.7",
+        "Programming Language :: Python :: 2.6",
         "License :: OSI Approved :: MIT License",
     ],
-    install_requires=['requests'],
+    install_requires=[
+        'requests',
+        'ansible',
+        'cacpy',
+        'setuptools',
+        'requests'
+    ],
     setup_requires=['pytest-runner'],
     tests_require=['pytest'],
 )

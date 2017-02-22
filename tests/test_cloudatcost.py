@@ -1,5 +1,6 @@
 import pytest
-from library.cloudatcost.cloudatcost import get_template, get_server
+from cloudatcost_ansible_module.cac_server import get_template, get_server
+
 
 class TestServerClass(object):
 
@@ -15,30 +16,33 @@ class TestServerClass(object):
         assert server is None
 
     def test_get_server_by_sid(self, cac_api):
-        server = get_server(cac_api, sid='123456789')
+        server = get_server(cac_api, server_id='123456789')
         assert (server.sid == '123456789')
 
     def test_get_server_by_label(self, cac_api):
         server = get_server(cac_api, label='serverlabel')
         assert (server.sid == '123456789')
 
-    def test_update_existing_server(self, cac_api):
+    def test_edit_existing_server_label(self, cac_api):
         server = get_server(cac_api, 123456789)
-        server.label = "test"
+        server.label = 'test'
+        assert server.label == 'test'
 
     def test_update_uneditable_raises_error(self, cac_api):
         server = get_server(cac_api, 123456789)
-        server.cpu = '16'
-        pytest.raises(AttributeError, server.update)
+        pytest.raises(AttributeError, setattr, server, 'cpu', '16')
 
-    def test_update_edit_changes_label(self, cac_api):
+    def test_update_edit_calls_api(self, cac_api):
         server = get_server(cac_api, 123456789)
         server.label = "testing"
-        newserver = server.update()
-        assert newserver.label == server.label
+        server.commit()
+
+    def test_delete(self, cac_api):
+        server = get_server(cac_api, 123456789)
+        server.delete()
 
 
-    # def test_create_new_server(self, cac_api):
+            # def test_create_new_server(self, cac_api):
     #     server = CACServer(cac_api,
     #                        template=26,
     #                        cpu=4, ram=2048, storage=40)

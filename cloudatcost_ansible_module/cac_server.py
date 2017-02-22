@@ -186,49 +186,55 @@ except ImportError:
     HAS_CAC = False
 
 
-    def get_template(api, lookup=None):
-        """Return a CACTemplate after querying the Cloudatcost API for a list of templates for a match.
+def get_template(api, lookup=None):
+    """Return a CACTemplate after querying the Cloudatcost API for a list of templates for a match.
 
-        Required Arguments:
-        lookup - Description or id to be matched
+    Required Arguments:
+    lookup - Description or id to be matched
 
-        Raises:
-        LookupError if desc or template_id can't be found
-        ValueError if no lookup parameters are provided
-        """
+    Raises:
+    LookupError if desc or template_id can't be found
+    ValueError if no lookup parameters are provided
+    """
 
-        if lookup is not None:
-            if isinstance(lookup, int):
-                lookup = str(lookup)
-            templates = api.get_template_info()['data']
-            try:
-                template = next(t for t in templates
-                                if t.get('ce_id') == lookup or t.get('name') == lookup)
-            except StopIteration:
-                raise LookupError("Template with ID or description: " + lookup + " was not found")
-            return CACTemplate(template.get('name'), template.get('ce_id'))
-        else:
-            raise ValueError("Must provide an id or description to lookup.")
-
-
-    def get_server(api, sid=None, label=None):
-        """
-        Use the CAC API to search for the provided sid or label
-        and return the first match found as a CACServer instance.
-
-        Returns None if no server found.
-        """
-        assert sid is not None or label is not None
-
+    if lookup is not None:
+        if isinstance(lookup, int):
+            lookup = str(lookup)
+        templates = api.get_template_info()['data']
         try:
-            server = next(
-                server for server in api.get_server_info().get('data') if
-                server['sid'] == str(sid) or server['label'] == label)
+            template = next(t for t in templates
+                            if t.get('ce_id') == lookup or t.get('name') == lookup)
         except StopIteration:
-            return None
+            raise LookupError("Template with ID or description: " + lookup + " was not found")
+        return CACTemplate(template.get('name'), template.get('ce_id'))
+    else:
+        raise ValueError("Must provide an id or description to lookup.")
 
-        server['api'] = api
-        return CACServer(api, server)
+
+def get_server(api, server_id=None, label=None):
+    """
+    Use the CAC API to search for the provided server_id or label
+    and return the first match found as a CACServer instance.
+
+    Returns None if no server found.
+    """
+    assert server_id is not None or label is not None
+
+    try:
+        server = next(
+            server for server in api.get_server_info().get('data') if
+            server['sid'] == str(server_id) or server['label'] == label)
+    except StopIteration:
+        return None
+
+    server['api'] = api
+    return CACServer(api, server)
+
+
+def check_ok(response):
+    if response['status'] != 'ok':
+        raise RuntimeError('CloudAtCost API call failed. Error: ' + json.dumps(response))
+
 
 CACTemplate = namedtuple('CACTemplate', ['desc', 'template_id'])
 
@@ -239,16 +245,33 @@ class CACServer(object):
     to CloudAtCost API.
     """
 
+    def set_label(self, value):
+        check_ok(self.api.rename_server(new_name=value, server_id=self._current_state['sid']))
+
+    def set_rdns(self, value):
+        check_ok(self.api.change_hostname(new_hostname=value, server_id=self._current_state['sid']))
+
+    def set_status(self, value):
+        if value in ('Powered On', 'on'):
+            check_ok(self.api.power_on_server(server_id=self._current_state['sid']))
+        elif value in ('Powered Off', 'off'):
+            check_ok(self.api.power_off_server(server_id=self._current_state['sid']))
+        elif value in ('Restarted', 'restart'):
+            check_ok(self.api.reset_server(server_id=self._current_state['sid']))
+
+    def set_mode(self, value):
+        check_ok(self.api.set_runmode(mode=value, server_id=self._current_state['sid']))
+
     API_ATTRS = ('uid', 'servername', 'sdate', 'sid', 'panel_note', 'rootpass', 'ip', 'netmask', 'gateway',
-                      'servertype')
+                 'servertype', 'ramusage', 'cpuusage', 'hdusage')
+
     # Build Attributes are read-only after creation
-    BUILD_ATTRS = ('cpu', 'ram', 'storage', 'os')
-    MODIFYIABLE_ATTRS = ('label', 'rdns', 'status', 'mode')
-    USAGE_ATTRS = ('ramusage', 'cpuusage', 'hdusage')
+    BUILD_ATTRS = ('cpu', 'ram', 'storage', 'template')
+
+    modify_functions = {'label': set_label, 'rdns': set_rdns, 'status': set_status, 'mode': set_mode}
 
     # status = attr.ib(default=None)  # 'Powered On', 'Powered Off', 'Pending On'
     # mode = attr.ib(default=None)  # 'Normal', 'Safe'
-    # template = attr.ib(default=None)
 
     def __getattr__(self, item):
         """
@@ -256,22 +279,22 @@ class CACServer(object):
 
         :raises AttributeError if attribute not found
         """
-        val = getattr(self._updated_state, item, getattr(self._current_state, item, None))
+        val = self._updated_state.get(item, self._current_state.get(item, None))
         if val is not None:
             return val
         else:
-            raise AttributeError(self.__class__ + ' has no attribute: ' + item)
+            raise AttributeError(self.__class__.__name__ + ' has no attribute: ' + item)
 
     def __setattr__(self, key, value):
-        if key in self.__class__.MODIFYIABLE_ATTRS:
-            return setattr(self._updated_state, key, value)
+        if key in self.__class__.modify_functions:
+            self._updated_state[key] = value
         else:
             raise AttributeError(self.__class__.__name__ + " does not have a modifiable attribute: " + key)
 
     def __init__(self, api, server):
-        self.api = api
-        self._current_state = server
-        self._updated_state = {}
+        object.__setattr__(self, 'api', api)
+        object.__setattr__(self, '_current_state', dict(server))  # Copy dictionary
+        object.__setattr__(self, '_updated_state', dict())
 
         if server['template'] is not None:
             self._current_state['template'] = get_template(api, server['template'])
@@ -281,26 +304,21 @@ class CACServer(object):
                 'label={self.label})').format(
             cls=type(self), self=self)
 
-    def update(self):
-        # Only update existing records.
+    def commit(self):
+        # Only commit existing records.
         if self.sid is None:
-            raise AttributeError("Server update failed. sid property not set on CACServer object.")
+            raise AttributeError("Server commit failed. sid property not set on CACServer object.")
 
-        current = self.api.get_server(sid=self.sid)
-
-        if current is None:
+        if get_server(self.api, server_id=self.sid) is None:
             raise LookupError("Unable to find server with sid: " + str(self.sid))
 
-        changed_attrs = [attribute.name for attribute in attr.fields(self.__class__) if
-                         getattr(self, attribute.name) != getattr(current, attribute.name)]
+        for (item, value) in self._updated_state.items():
+            self.modify_functions[item](self, value)
 
-        modified_immutables = [a for a in changed_attrs if a not in self.__class__.MODIFYIABLE_ATTRS]
-
-        if len(modified_immutables) > 0:
-            raise AttributeError("(" + ", ".join(modified_immutables) + ") can not be changed in a built server.")
+        return get_server(self.api, server_id=self.sid)
 
     def delete(self):
-        self.api.server_delete(self.sid)
+        check_ok(self.api.server_delete(self.sid))
 
 
 def cac_servers(module, api, state, label, cpus, ram, storage, template_id,
@@ -316,7 +334,7 @@ def cac_servers(module, api, state, label, cpus, ram, storage, template_id,
     # 1. Get existing server if it exists.
     # 2. Create if not existing (Build)
     # 3. Fail if any immutable values are specificed and different (cpus, ram, storage, template_id)
-    # 4. Complete available update operations:
+    # 4. Complete available commit operations:
     #  . Update label (Rename)
     #  . Update RDNS
     #  . Update Run Mode
@@ -537,11 +555,11 @@ def main():
                 wait, wait_timeout)
 
     # TODO IMPLEMENT
-    if module.check_mode:
-        # Check if any changes would be made but don't actually make those changes
-        module.exit_json(changed=check_if_system_state_would_be_changed())
-
-        # TODO ? Implement ansible_facts to provide things like root password?
+    # if module.check_mode:
+    #     # Check if any changes would be made but don't actually make those changes
+    #     module.exit_json(changed=check_if_system_state_would_be_changed())
+    #
+    #     # TODO ? Implement ansible_facts to provide things like root password?
 
 
 # import module snippets

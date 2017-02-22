@@ -1,7 +1,5 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
-*.py[cod]
-
 # C extensions
 *.so
 
@@ -10,6 +8,7 @@ __pycache__/
 env/
 build/
 develop-eggs/
+*.egg-info/
 .cache
 coverage.xml
 # Intellij
