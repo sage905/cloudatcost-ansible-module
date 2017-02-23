@@ -1,6 +1,6 @@
 import pytest
 from cloudatcost_ansible_module.cac_server import get_template, get_server
-
+from mock import call
 
 class TestServerClass(object):
 
@@ -36,10 +36,12 @@ class TestServerClass(object):
         server = get_server(cac_api, 123456789)
         server.label = "testing"
         server.commit()
+        assert call.rename_server(new_name='testing', server_id='123456789') in cac_api.method_calls
 
     def test_delete(self, cac_api):
         server = get_server(cac_api, 123456789)
         server.delete()
+        assert call.server_delete(server_id='123456789') in cac_api.method_calls
 
 
             # def test_create_new_server(self, cac_api):

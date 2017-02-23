@@ -245,6 +245,9 @@ class CACServer(object):
     to CloudAtCost API.
     """
 
+    def delete(self):
+        check_ok(self.api.server_delete(server_id=self.sid))
+
     def set_label(self, value):
         check_ok(self.api.rename_server(new_name=value, server_id=self._current_state['sid']))
 
@@ -317,8 +320,6 @@ class CACServer(object):
 
         return get_server(self.api, server_id=self.sid)
 
-    def delete(self):
-        check_ok(self.api.server_delete(self.sid))
 
 
 def cac_servers(module, api, state, label, cpus, ram, storage, template_id,

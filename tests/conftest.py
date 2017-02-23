@@ -1,5 +1,6 @@
 from cacpy.CACPy import *
 import pytest
+import mock
 
 ROOT_URL = BASE_URL + API_VERSION
 
@@ -46,52 +47,12 @@ V1_STANDARD_RESPONSE_ERROR = {
 }
 
 
-def mocked_requests_get(*args, **kwargs):
-    class MockResponse(object):
-        def __init__(self, json_data, status_code):
-            self.json_data = json_data
-            self.status_code = status_code
-
-        def json(self):
-            return self.json_data
-
-    return {
-        ROOT_URL + LIST_SERVERS_URL:
-            MockResponse(V1_LISTSERVERS_RESPONSE, 200),
-        ROOT_URL + LIST_TEMPLATES_URL:
-            MockResponse(V1_LIST_TEMPLATES_RESPONSE, 200),
-    }.get(args[0], MockResponse(V1_STANDARD_RESPONSE_ERROR, 404))
-
-
-def mocked_requests_post(*args, **kwargs):
-    class MockResponse(object):
-        def __init__(self, json_data, status_code):
-            self.json_data = json_data
-            self.status_code = status_code
-
-        def json(self):
-            return self.json_data
-
-    return {
-        ROOT_URL + RENAME_SERVER_URL:
-            MockResponse(V1_STANDARD_RESPONSE_OK, 200),
-        ROOT_URL + SERVER_DELETE_URL:
-            MockResponse(V1_STANDARD_RESPONSE_OK, 200),
-
-    }.get(args[0], MockResponse(V1_STANDARD_RESPONSE_ERROR, 404))
-
-
 # This method will be used by the mock to replace requests.get_template in all tests
 @pytest.fixture(autouse=True)
-def simulate_get(monkeypatch):
-    monkeypatch.setattr("requests.get", mocked_requests_get)
-
-
-@pytest.fixture(autouse=True)
-def simulate_post(monkeypatch):
-    monkeypatch.setattr("requests.post", mocked_requests_post)
-
-
-@pytest.fixture()
 def cac_api():
-    return CACPy('test@user.com', 'testkey')
+    api = mock.Mock(spec=CACPy)
+    api.get_server_info.return_value = V1_LISTSERVERS_RESPONSE
+    api.get_template_info.return_value = V1_LIST_TEMPLATES_RESPONSE
+    api.rename_server.return_value = V1_STANDARD_RESPONSE_OK
+    api.server_delete.return_value = V1_STANDARD_RESPONSE_OK
+    return api
