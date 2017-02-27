@@ -3,3 +3,5 @@ pytest-runner==2.11.1
 cacpy>=0.5.2
 requests==2.13.0
 mock==2.0.0
+git+https://github.com/ansible/ansible/@v2.2.2.0-0.1.rc1#egg=ansible
+pycurl
