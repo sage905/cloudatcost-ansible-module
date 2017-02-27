@@ -503,7 +503,7 @@ def get_api(api_user, api_key):
         if not api_user:
             api_user = os.environ['CAC_API_USER']
     except KeyError:
-        raise CacApiError("Unable to get {} for CloudAtCost connection".format(
+        raise CacApiError("Unable to get %s for CloudAtCost connection" % (
             'api key from parameter or CAC_API_KEY environment variable' if not api_key else
             'api user from paramater or CAC_API_USER environment variable'))
 
