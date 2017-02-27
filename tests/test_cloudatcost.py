@@ -133,7 +133,7 @@ class TestAnsibleModule(object):
         pytest.raises(SystemExit, cac_server.main)
         out, err = capsys.readouterr()
         output = json.loads(out)
-        print output
+        print(output)
         assert output['changed'] is True
         assert output['result']['action'] == 'build'
         assert output['build_complete'] is False

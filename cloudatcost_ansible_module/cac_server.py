@@ -188,7 +188,7 @@ except ImportError:
     HAS_CAC = False
 
 
-class CacApiError(StandardError):
+class CacApiError(Exception):
     """
     Raised when something went wrong during a call to CloudAtCost's API
     """
@@ -345,7 +345,7 @@ class CACServer(object):
         if get_server(self.api, server_id=self.sid) is None:
             raise LookupError("Unable to find server with sid: " + str(self.sid))
 
-        for (item, value) in self._updated_state.items():
+        for (item, value) in list(self._updated_state.items()):
             self._modify_functions[item](self, value)
 
         return get_server(self.api, server_id=self.sid)
@@ -504,8 +504,8 @@ def get_api(api_user, api_key):
             api_user = os.environ['CAC_API_USER']
     except KeyError:
         raise CacApiError("Unable to get %s for CloudAtCost connection" % (
-            'api key from parameter or CAC_API_KEY environment variable' if not api_key else
-            'api user from paramater or CAC_API_USER environment variable'))
+            "api key from parameter or CAC_API_KEY environment variable" if not api_key else
+            "api user from paramater or CAC_API_USER environment variable"))
 
     api = CACPy(api_user, api_key)
     check_ok(api.get_resources())
@@ -582,7 +582,7 @@ def main():
                 result = CACServer.build_server(api, cpus, ram, storage, template)
                 module.exit_json(changed=True, result=result, action=action, build_complete=False)
 
-    except CacApiError, e:
+    except CacApiError as e:
         module.fail_json(msg='%s' % e.message)
 
 
