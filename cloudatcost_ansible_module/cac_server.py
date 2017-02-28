@@ -2,7 +2,7 @@
 # Custom Module to manage server instances in a CloudAtCost
 # (https://cloudatcost.com) Cloud
 # This module was originally based on the Ansible Linode module
-from collections import namedtuple, defaultdict
+from collections import namedtuple, defaultdict, MutableMapping
 import string
 from ansible.module_utils.basic import *
 
@@ -210,7 +210,6 @@ def get_server(api, server_id=None, label=None, server_name=None):
     except StopIteration:
         return None
 
-    server['api'] = api
     return CACServer(api, server)
 
 
@@ -247,42 +246,33 @@ class CACTemplate(namedtuple('CACTemplate', ['desc', 'template_id'])):
         return cls(template.get('name'), template.get('ce_id'))
 
 
-class CACServer(object):
+def _wait_for_server_build(api, servername, wait_timeout):
+    """
+    Check every 10s for the server to be built.  Return the server object if found before the timeout.
+    :param api: CACPy connection
+    :param servername: string to match against server_name in the CAC API response
+    :param wait_timeout: number of seconds to wait for the build to complete.
+    :return: CACServer object if server created within the wait_time.  None if the time expires.
+    """
+    for t in range(1, wait_timeout, 10):
+        time.sleep(10)
+        server = get_server(api, server_name=servername)
+        if server:
+            return server
+    return None
+
+
+class BuildResult(namedtuple('BuildResult', ["response", "server"])):
+    """ Wrapper for server build response.  Contains the CloudAtCost API response from the build task and an
+    optional server object, if the build completed before the wait_timeout.
+    """
+
+
+class CACServer(MutableMapping):
     """Represent a server instance at cloudatost.  Perform checking and validation
     on attribute modification, to ensure valid state transitions before committing
     to CloudAtCost API.
     """
-
-    @staticmethod
-    def build_server(api, cpu, ram, disk, template):
-        """
-        Build a server with the provided parameters
-
-        :param api: CACPy instance
-        :param cpu: # of vCPU's to allocate
-        :param ram: RAM to allocate (MB)
-        :param disk: Disk to allocate (GB)
-        :param template: OS Template to use (id, or string)
-        :return:
-        """
-
-        _required_build_params = ('cpu', 'ram', 'disk', 'template')
-
-        assert isinstance(api, CACPy)
-
-        missing = [param for param in _required_build_params if not locals()[param]]
-
-        if missing: raise AttributeError("Server Build missing arguments: " + " ".join(missing))
-
-        os_template = CACTemplate.get_template(api, template)
-        response = api.server_build(cpu, ram, disk, os_template)
-
-        if response.get('result') == 'successful':
-            return response
-        else:
-            raise CacApiError(string.Formatter().vformat("Server Build Failed. Status: {status} "
-                                                      "#{error}, \"{error_description}\" ",
-                                                         (), defaultdict(str, **response)))
 
     def _set_label(self, value):
         check_ok(self.api.rename_server(new_name=value, server_id=self._current_state['sid']))
@@ -303,74 +293,100 @@ class CACServer(object):
 
     _modify_functions = {'label': _set_label, 'rdns': _set_rdns, 'status': _set_status, 'mode': _set_mode}
 
-    def __getattr__(self, item):
+    def __init__(self, api, server):
+        self.api = api
+        self._current_state = dict(server)
+        self._changed_attrs = dict()
+
+        if server['template'] is not None:
+            self._current_state['template'] = CACTemplate.get_template(api, server['template'])
+
+    def __delitem__(self, key):
+        self._changed_attrs.__delitem__(key)
+
+    def __len__(self):
+        return len(self.__getstate__())
+
+    def __iter__(self):
+        return self.__getstate__().__iter__()
+
+    def __getitem__(self, item):
         """
         Get the modified value of the server attribute, or the existing value if not modified.
 
         :raises AttributeError if attribute not found
         """
-        val = self._updated_state.get(item, self._current_state.get(item, None))
-        if val is not None:
-            return val
-        else:
-            raise AttributeError(self.__class__.__name__ + ' has no attribute: ' + item)
+        return self._changed_attrs[item] if item in self._changed_attrs else self._current_state[item]
 
-    def __setattr__(self, key, value):
+    def __setitem__(self, key, value):
         if key in self.__class__._modify_functions:
-            self._updated_state[key] = value
+            self._changed_attrs[key] = value
         else:
-            raise AttributeError(self.__class__.__name__ + " does not have a modifiable attribute: " + key)
-
-    def __init__(self, api, server):
-        object.__setattr__(self, 'api', api)
-        object.__setattr__(self, '_current_state', dict(server))  # Copy dictionary
-        object.__setattr__(self, '_updated_state', dict())
-
-        if server['template'] is not None:
-            self._current_state['template'] = CACTemplate(api, server['template'])
+            raise KeyError(self.__class__.__name__ + " does not have a modifiable item: " + key)
 
     def __repr__(self):
-        return ('{cls.__name__}(api_account={self.api.email}, sid={self.sid}, '
+        return ('{cls.__name__}(api_account={self.api.email}, sid={self[sid]}, '
                 'label={label})').format(
-            cls=type(self), self=self, label=getattr(self, 'label', None))
+            cls=type(self), self=self, label=self.get('label'))
+
+    def __getstate__(self):
+        state = self._current_state.copy()
+        return state
 
     def delete(self):
-        check_ok(self.api.server_delete(server_id=self.sid))
+        check_ok(self.api.server_delete(server_id=self['sid']))
 
     def commit(self):
         # Only commit existing records.
-        if self.sid is None:
+        if self['sid'] is None:
             raise AttributeError("Server commit failed. sid property not set on CACServer object.")
 
-        if get_server(self.api, server_id=self.sid) is None:
-            raise LookupError("Unable to find server with sid: " + str(self.sid))
+        if get_server(self.api, server_id=self['sid']) is None:
+            raise LookupError("Unable to find server with sid: " + str(self['sid']))
 
-        for (item, value) in list(self._updated_state.items()):
+        for (item, value) in list(self._changed_attrs.items()):
             self._modify_functions[item](self, value)
 
-        return get_server(self.api, server_id=self.sid)
+        return get_server(self.api, server_id=self['sid'])
+
+    @staticmethod
+    def build_server(api, cpu, ram, disk, template, wait=False, wait_timeout=300):
+        """
+        Build a server with the provided parameters
+
+        :param api: CACPy instance
+        :param cpu: # of vCPU's to allocate
+        :param ram: RAM to allocate (MB)
+        :param disk: Disk to allocate (GB)
+        :param template: OS Template to use (id, or string)
+        :param wait: Wait for server build to complete
+        :param wait_timeout: Seconds to wait for build to complete
+        :return: ( request.Response, CACServer ) response from CAC server, CACServer object if build completed
+        :raises CacApiError on any error
+        """
+
+        _required_build_params = ('cpu', 'ram', 'disk', 'template')
+
+        assert isinstance(api, CACPy)
+
+        missing = [param for param in _required_build_params if not locals()[param]]
+
+        if missing:
+            raise AttributeError("Server Build missing arguments: " + " ".join(missing))
+
+        os_template = CACTemplate.get_template(api, template)
+        response = api.server_build(cpu, ram, disk, os_template.template_id)
+
+        if response.get('result') == 'successful':
+            server = _wait_for_server_build(api, response.get('servername'), wait_timeout) if wait else None
+            return BuildResult(response, server)
+        else:
+            raise CacApiError(string.Formatter().vformat("Server Build Failed. Status: {status} "
+                                                         "#{error}, \"{error_description}\" ",
+                                                         (), defaultdict(str, **response)))
 
 
-# def cac_servers(module, api, state, label, cpus, ram, storage, template_id,
-#                 server_id, runmode, fqdn,
-#                 wait, wait_timeout):
-#
-#
-#         # Any create step triggers a job that need to be waited for.
-#             # Create server entity
-#             try:
-#                 # Check os template
-#                 for template in api.get_template_info()['data']:
-#                     if template['ce_id'] == str(template_id):
-#                         template_detail = template['name']
-#                         break
-#
-#                 if not template_detail:
-#                     module.fail_json(
-#                         msg='OS with id #%d is not an available template' %
-#                             template_id)
-#
-#                 res = api.server_build(cpus, ram, storage, template_id)
+# res = api.server_build(cpus, ram, storage, template_id)
 #
 #                 if res['status'] != 'ok' or res['result'] != 'successful':
 #                     module.fail_json(msg="Server Creation Failed: " +
@@ -529,7 +545,7 @@ def main():
             template=dict(type='int'),
             runmode=dict(type='str', default="safe"),
             server_id=dict(type='int', aliases=['sid']),
-            wait=dict(type='bool', default=True),
+            wait=dict(type='bool', default=False),
             wait_timeout=dict(default=300),
         ),
         supports_check_mode=True
@@ -578,22 +594,22 @@ def main():
         # Act on the state
         if state in ('active', 'present', 'started'):
             if not server:
-                action = 'build'
-                result = CACServer.build_server(api, cpus, ram, storage, template)
-                module.exit_json(changed=True, result=result, action=action, build_complete=False)
-
-    except CacApiError as e:
+                result = CACServer.build_server(api, cpus, ram, storage, template, wait, wait_timeout)
+                module.exit_json(changed=True, result=result.response, server=result.server,
+                                 build_complete=result.server is not None)
+    except Exception as e:
         module.fail_json(msg='%s' % e.message)
 
 
 
 
-    # TODO IMPLEMENT
-    # if module.check_mode:
-    #     # Check if any changes would be made but don't actually make those changes
-    #     module.exit_json(changed=check_if_system_state_would_be_changed())
-    #
-    #     # TODO ? Implement ansible_facts to provide things like root password?
+        # TODO IMPLEMENT
+        # if module.check_mode:
+        #     # Check if any changes would be made but don't actually make those changes
+        #     module.exit_json(changed=check_if_system_state_would_be_changed())
+        #
+        #     # TODO ? Implement ansible_facts to provide things like root password?
+
 
 if __name__ == '__main__':
     main()

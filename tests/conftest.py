@@ -1,4 +1,3 @@
-from ansible.module_utils.basic import AnsibleModule
 from cacpy.CACPy import *
 import pytest
 import mock
@@ -34,6 +33,42 @@ V1_LIST_TEMPLATES_RESPONSE = {'status': 'ok', 'action': 'listtemplates', 'api': 
                                        {'ce_id': '26', 'name': 'CentOS-7-64bit'},
                                        {'ce_id': '27', 'name': 'Ubuntu-14.04.1-LTS-64bit'},
                                        {'ce_id': '74', 'name': 'FreeBSD-10-1-64bit'}], 'time': 1487027299}
+
+V1_LISTSERVERS_RESPONSE_POST_BUILD = {'status': 'ok', 'action': 'listservers', 'api': 'v1',
+                           'data': [{'sdate': '07/14/2015', 'uid': '4482712345', 'ip': '10.1.1.2',
+                                     'servername': 'c123456789-cloudpro-123456789', 'ram': '2048',
+                                     'portgroup': 'Cloud-ip-123',
+                                     'id': '123456789', 'label': 'serverlabel',
+                                     'vmname': 'c90000-CloudPRO-123456789-123456789',
+                                     'gateway': '10.1.1.1', 'hdusage': '5.123456789', 'rdns': 'server.test.example',
+                                     'rootpass': 'password',
+                                     'vncport': '12345', 'hostname': 'server.test.example', 'storage': '10',
+                                     'cpuusage': '26',
+                                     'template': 'CentOS-7-64bit', 'sid': '123456789', 'vncpass': 'secret',
+                                     'status': 'Powered On',
+                                     'lable': 'serverlabel', 'servertype': 'cloudpro',
+                                     'rdnsdefault': 'notassigned.cloudatcost.com',
+                                     'netmask': '255.255.255.0', 'ramusage': '763.086', 'mode': 'Normal',
+                                     'packageid': '15',
+                                     'panel_note': 'testnote', 'cpu': '4'},
+                                    {'sdate': '07/14/2016', 'uid': '4482712345', 'ip': '10.1.1.3',
+                                     'servername': 'c012345678-cloudpro-012345678', 'ram': '1024',
+                                     'portgroup': 'Cloud-ip-123',
+                                     'id': '012345678', 'label': 'serverlabel',
+                                     'vmname': 'c90000-CloudPRO-012345678-012345678',
+                                     'gateway': '10.1.1.1', 'hdusage': '5.012345678', 'rdns': 'server.test.example',
+                                     'rootpass': 'password',
+                                     'vncport': '12345', 'hostname': 'server.test.example', 'storage': '10',
+                                     'cpuusage': '26',
+                                     'template': 'CentOS-7-64bit', 'sid': '012345678', 'vncpass': 'secret',
+                                     'status': 'Powered On',
+                                     'lable': 'serverlabel', 'servertype': 'cloudpro',
+                                     'rdnsdefault': 'notassigned.cloudatcost.com',
+                                     'netmask': '255.255.255.0', 'ramusage': '763.086', 'mode': 'Normal',
+                                     'packageid': '15',
+                                     'panel_note': 'testnote', 'cpu': '4'}
+                                    ], 'time': 1487000464}
+
 
 V1_STANDARD_RESPONSE_OK = {
     "status": "ok",
@@ -83,9 +118,26 @@ def mock_cac_api():
 
 
 @pytest.fixture()
+def simulated_build(num):
+    for i in range(1, num, 1):
+        yield V1_LISTSERVERS_RESPONSE
+    while True:
+        yield V1_LISTSERVERS_RESPONSE_POST_BUILD
+
+
+@pytest.fixture()
 def patch_get_api(monkeypatch):
     def patch_api(api_user, api_key):
         return mock_cac_api()
+    monkeypatch.setattr(cac_server, "get_api", patch_api)
+
+
+@pytest.fixture()
+def patch_get_api_simulated_build(monkeypatch):
+    def patch_api(api_user, api_key):
+        api = mock_cac_api()
+        api.get_server_info.side_effect = simulated_build(1)
+        return api
     monkeypatch.setattr(cac_server, "get_api", patch_api)
 
 
