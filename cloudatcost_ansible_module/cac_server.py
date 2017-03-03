@@ -205,8 +205,9 @@ def get_server(api, server_id=None, label=None, server_name=None):
     assert server_id is not None or label is not None or server_name is not None
 
     try:
+        servers = api.get_server_info().get('data')
         server = next(
-            server for server in api.get_server_info().get('data') if
+            server for server in servers if
             server['sid'] == str(server_id) or server['servername'] == server_name or server['label'] == label)
     except StopIteration:
         return None
@@ -255,26 +256,12 @@ class CACTemplate(namedtuple('CACTemplate', ['desc', 'template_id'])):
         return cls(template.get('name'), template.get('ce_id'))
 
 
-def _wait_for_server_build(api, servername, wait_timeout):
-    """
-    Check every 10s for the server to be built.  Return the server object if found before the timeout.
-    :param api: CACPy connection
-    :param servername: string to match against server_name in the CAC API response
-    :param wait_timeout: number of seconds to wait for the build to complete.
-    :return: CACServer object if server created within the wait_time.  None if the time expires.
-    """
-    for t in range(1, wait_timeout, 10):
-        time.sleep(10)
-        server = get_server(api, server_name=servername)
-        if server and server['status'] == 'Powered On':
-            return server
-    return None
-
-
-class BuildResult(namedtuple('BuildResult', ["response", "server"])):
-    """ Wrapper for server build response.  Contains the CloudAtCost API response from the build task and an
-    optional server object, if the build completed before the wait_timeout.
-    """
+def _poller(poll_func, waittime=300, interval=1):
+    for t in range(1, waittime, interval):
+        time.sleep(interval)
+        result = poll_func()
+        if result:
+            return result
 
 
 class CACServer(MutableMapping):
@@ -299,6 +286,8 @@ class CACServer(MutableMapping):
             check_ok(self.api.power_off_server(server_id=self._current_state['sid']))
         elif value in ('Restarted', 'restart'):
             check_ok(self.api.reset_server(server_id=self._current_state['sid']))
+        elif value in ('Deleted', 'delete'):
+            check_ok(self.api.server_delete(server_id=self['sid']))
 
     _modify_functions = {'label': _set_label, 'rdns': _set_rdns, 'status': _set_status, 'mode': _set_mode}
 
@@ -342,8 +331,8 @@ class CACServer(MutableMapping):
     def __getstate__(self):
         return self._current_state.copy()
 
-    def delete(self):
-        return self.api.server_delete(server_id=self['sid'])
+    def check(self):
+        return bool(self._changed_attrs)
 
     def commit(self):
         # Only commit existing records.
@@ -360,6 +349,14 @@ class CACServer(MutableMapping):
             return get_server(self.api, server_id=self['sid'])
         else:
             return self
+
+    @staticmethod
+    def check_server_status(api, servername, status):
+        def f():
+            server = get_server(api, server_name=servername)
+            if server and server['status'] == status:
+                return server
+        return f
 
     @staticmethod
     def build_server(api, cpu, ram, disk, template, label, wait=False, wait_timeout=300):
@@ -391,15 +388,30 @@ class CACServer(MutableMapping):
         assert cpu in range(1, 16)
 
         os_template = CACTemplate.get_template(api, template)
-        response = api.server_build(cpu, ram, disk, os_template.template_id)
 
+        # The CloudAtCost Build timing can be unpredictable, but optimally works like:
+        # 1. call API to build.
+        # 2. JSON response includes result: successful, a taskid (which is useless since the listtasks API
+        # doesn't work), and a servername.
+        # 3. Once the task is queued, a new server will show up in the listservers call with the servername and a
+        # status of "Installing".  This could take minutes, hours, or days.
+        # 4. The server will be built, and at that time, the status will change to "Powered On".  The server then takes
+        # some time to boot.
+
+        # Queue the build
+        response = api.server_build(cpu, ram, disk, os_template.template_id)
         if response.get('result') == 'successful':
-            temp_server = get_server(api, server_name=response['servername'])
-            if temp_server:
-                temp_server['label'] = label
-                temp_server.commit()
-            server = _wait_for_server_build(api, response.get('servername'), wait_timeout) if wait else None
-            return BuildResult(response, server)
+            # Wait up to 10s for the server to show up in listservers.
+            server = _poller(lambda: get_server(api, server_name=response['servername']), 10)
+            # Set the label, so we can find it again in the future
+            if server:
+                server['label'] = label
+                server.commit()
+            # Optionally wait for the server to be Powered On.  Poll every 10s.
+            if wait:
+                server = _poller(CACServer.check_server_status(api, response.get('servername'), 'Powered On'),
+                                 wait_timeout, 10)
+            return server
         else:
             raise CacApiError(string.Formatter().vformat("Server Build Failed. Status: {status} "
                                                          "#{error}, \"{error_description}\" ",
@@ -451,22 +463,8 @@ def main():
         module.fail_json(msg='CACPy required for this module')
 
     changed = False
-    jobs = []
-    response = None
-    result = {}
-    template_detail = None
-
-    # Steps:
-    # 2. Create if not existing (Build)
-    # 3. Fail if any immutable values are specificed and different (cpus, ram, storage, template_id)
-    # 4. Complete available commit operations:
-    #  . Update label (Rename)
-    #  . Update RDNS
-    #  . Update Run Mode
-    #  . Update Power State (Power Off, Power On, Reset)
 
     state = module.params.get('state')
-
     label = module.params.get('label')
     rdns = module.params.get('fqdn')
     cpus = module.params.get('cpus')
@@ -482,20 +480,18 @@ def main():
         api = get_api(module.params.get('api_key'), module.params.get('api_user'))
         server = get_server(api, server_id=server_id, label=label)
 
-        # Act on the state
         if state in ('absent', 'deleted'):
-            if server is not None:
-                result = server.delete()
-                if check_ok(result):
-                    changed = True
+            if server:
+                server['status'] = "Deleted"
         else:
+            # For any other state, we need a server object.
             if not server:
-                build_result = CACServer.build_server(api, cpus, ram, storage, template, label, wait, wait_timeout)
-                result, server = build_result.response, build_result.server
+                server = CACServer.build_server(api, cpus, ram, storage, template, label, wait, wait_timeout)
                 if server:
                     changed = True
                 else:
-                    raise RuntimeError("Unable to create server.")
+                    raise RuntimeError("Build initiated but no server was returned.  Check CloudAtCost Panel.  You "
+                                       "will need to manually set the server label in the panel before trying again.")
 
             if state in ('present', 'active', 'started'):
                 server['status'] = 'Powered On'
@@ -511,26 +507,19 @@ def main():
             if runmode:
                 server['mode'] = runmode
 
+        if module.check_mode:
+            changed = server.check()
+            server = None
+        else:
             updated = server.commit()
             if updated != server:
                 changed = True
                 server = updated
 
-        module.exit_json(changed=changed, server=server, result=result)
+        module.exit_json(changed=changed, server=server)
 
     except Exception as e:
         module.fail_json(msg='%s' % e.message)
-
-
-
-
-        # TODO IMPLEMENT
-        # if module.check_mode:
-        #     # Check if any changes would be made but don't actually make those changes
-        #     module.exit_json(changed=check_if_system_state_would_be_changed())
-        #
-        #     # TODO ? Implement ansible_facts to provide things like root password?
-        # Setup the api_key and api_user
 
 
 if __name__ == '__main__':

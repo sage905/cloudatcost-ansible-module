@@ -6,7 +6,7 @@ from cloudatcost_ansible_module import cac_server as cac_server
 import json
 from ansible.module_utils import basic
 from ansible.module_utils._text import to_bytes
-from mock import call, MagicMock
+from mock import call
 
 from tests.conftest import simulated_build
 
@@ -96,7 +96,8 @@ class TestServerClass(object):
 
     def test_delete(self, mock_cac_api):
         server = get_server(mock_cac_api, 123456789)
-        server.delete()
+        server['status'] = "Deleted"
+        server.commit()
         assert call.server_delete(server_id='123456789') in mock_cac_api.method_calls
 
     def test_change_everything(self, mock_cac_api):
@@ -115,65 +116,27 @@ class TestServerClass(object):
         pytest.raises(CacApiError, CACServer.build_server, api=cac_api_fail_build, cpu=1, ram=1024, disk=10,
                       template=27, label='test')
 
+    @pytest.mark.usefixtures('patch_sleep')
     def test_server_build_success(self, mock_cac_api):
-        result = CACServer.build_server(mock_cac_api, cpu=1, ram=1024, disk=10, template=27, label="buildtest")
+        mock_cac_api.get_server_info.side_effect = simulated_build()
+        server = CACServer.build_server(mock_cac_api, cpu=1, ram=1024, disk=10, template=27, label="buildtest")
+        assert server
         assert call.server_build(1, 1024, 10, '27') in mock_cac_api.method_calls
-        assert result.response['status'] == 'ok'
 
-    def test_server_build_with_wait(self, mock_cac_api, monkeypatch):
-        # Patch time.sleep
-        fakesleep = MagicMock()
-        monkeypatch.setattr(time, 'sleep', fakesleep)
 
-        # Modify cac_api Mock to return a new server after call_count
-        call_count = 3
-        mock_cac_api.get_server_info.side_effect = simulated_build(call_count)
+    @pytest.mark.usefixtures('patch_sleep')
+    def test_server_build_with_wait(self, mock_cac_api):
+        mock_cac_api.get_server_info.side_effect = simulated_build()
 
-        result = CACServer.build_server(mock_cac_api, cpu=1, ram=1024, disk=10, template=27, label='test', wait=True,
+        server = CACServer.build_server(mock_cac_api, cpu=1, ram=1024, disk=10, template=27, label='test', wait=True,
                                         wait_timeout=30)
-        assert fakesleep.call_count == call_count - 1  # We call get_server_info 1 more time in the build process.
-        assert result.response['result'] == 'successful'
-        assert result.server
-        assert result.server['status'] == 'Powered On'
+        assert server
+        assert call.server_build(1, 1024, 10, '27') in mock_cac_api.method_calls
 
 
 class TestAnsibleModule(object):
     # This is a bit of a mess.  A lot of work required to mock objects to test building a server, since there are
     # state change dependencies.  Maybe refactor code, to make it easier to simulate?
-
-    # @pytest.mark.usefixtures('patch_get_server')
-    # def test_module_builds_nonexistent_server(self, capsys, monkeypatch):
-    #     set_module_args(dict(api_user="test@guy.com", api_key="secret", label='test', cpus=1, ram=1024, storage=10,
-    #                          template=27, state='present'))
-    #     mock_server = mock.MagicMock(spec=CACServer)
-    #     monkeypatch.setattr(cac_server, 'get_server', lambda api, server_id, label: None)
-    #     monkeypatch.setattr(cac_server.CACServer, 'build_server', staticmethod(lambda *args, **kwargs: BuildResult(
-    #         response=V1_BUILD_SUCCESS,
-    #         server=mock_server)))
-    #     pytest.raises(SystemExit, cac_server.main)
-    #     out, err = capsys.readouterr()
-    #     output = json.loads(out)
-    #     print output
-    #     assert output['changed'] is True
-    #     assert output['result'] == {u'status': u'ok', u'servername': u'c012345678-cloudpro-012345678', u'api': u'v1',
-    #                                 u'result': u'successful', u'taskid': 7858123456789, u'time': 1487860096,
-    #                                 u'action': u'build'}
-    #
-    # @pytest.mark.usefixtures('patch_get_api_simulated_build')
-    # def test_module_builds_nonexistent_server_with_wait(self, capsys, monkeypatch):
-    #     set_module_args(dict(api_user="test@guy.com", api_key="secret", label='test', cpus=1, ram=1024, storage=10,
-    #                          template=27, state='present', wait=True, wait_timeout=20))
-    #
-    #     monkeypatch.setattr('time.sleep', lambda x: None)
-    #
-    #     pytest.raises(SystemExit, cac_server.main)
-    #     out, err = capsys.readouterr()
-    #     output = json.loads(out)
-    #     assert output['changed'] is True
-    #     assert output['server']
-    #     assert output['result'] == {u'status': u'ok', u'servername': u'c012345678-cloudpro-012345678', u'api': u'v1',
-    #                                 u'result': u'successful', u'taskid': 7858123456789, u'time': 1487860096,
-    #                                 u'action': u'build'}
 
     def test_module_deletes_server(self, capsys):
         set_module_args(dict(api_user="test@guy.com", api_key="secret", server_id=123456789, state='absent'))
@@ -216,8 +179,17 @@ class TestAnsibleModule(object):
         out, err = capsys.readouterr()
         output = json.loads(out)
         assert output['changed'] is True
-        print output
         api = cac_server.get_api('', '')
-        print api.mock_calls
         api.power_off_server.assert_has_calls(
             [call.power_off_server(server_id='123456789'), ], any_order=True)
+
+    def test_check_mode(self, capsys):
+        set_module_args(dict(api_user="test@guy.com", api_key="secret", server_id=123456789,
+                             state='stopped', _ansible_check_mode=True))
+        pytest.raises(SystemExit, cac_server.main)
+        out, err = capsys.readouterr()
+        output = json.loads(out)
+        assert output['changed'] is True
+        api = cac_server.get_api('', '')
+        assert call.power_off_server(server_id='123456789') not in api.mock_calls
+

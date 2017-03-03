@@ -1,3 +1,4 @@
+import time
 from cacpy.CACPy import *
 import pytest
 import mock
@@ -81,7 +82,7 @@ V1_LISTSERVERS_RESPONSE_POST_BUILD = {'status': 'ok', 'action': 'listservers', '
                                                 'vncport': '12345', 'hostname': 'server.test.example', 'storage': '10',
                                                 'cpuusage': '26',
                                                 'template': 'CentOS-7-64bit', 'sid': '012345678', 'vncpass': 'secret',
-                                                'status': 'Powered On',
+                                                'status': 'Installing',
                                                 'lable': 'serverlabel', 'servertype': 'cloudpro',
                                                 'rdnsdefault': 'notassigned.cloudatcost.com',
                                                 'netmask': '255.255.255.0', 'ramusage': '763.086', 'mode': 'Normal',
@@ -146,11 +147,18 @@ def mock_cac_api():
     return api
 
 
-def simulated_build(num):
-    for i in range(1, num, 1):
-        yield V1_LISTSERVERS_RESPONSE
+def simulated_build(before=3, build=3):
+    before_response = V1_LISTSERVERS_RESPONSE
+    build_response = V1_LISTSERVERS_RESPONSE_POST_BUILD
+    complete_response = V1_LISTSERVERS_RESPONSE_POST_BUILD
+    complete_response['data'][1]['status'] = "Powered On"
+
+    for i in range(1, before, 1):
+        yield before_response
+    for i in range(1, build, 1):
+        yield build_response
     while True:
-        yield V1_LISTSERVERS_RESPONSE_POST_BUILD
+        yield complete_response
 
 
 @pytest.fixture(autouse=True)
@@ -161,6 +169,12 @@ def patch_get_api(monkeypatch):
         return api
 
     monkeypatch.setattr(cac_server, "get_api", patch_api)
+
+@pytest.fixture()
+def patch_sleep(monkeypatch):
+    # Patch time.sleep
+    fakesleep = mock.MagicMock()
+    monkeypatch.setattr(time, 'sleep', fakesleep)
 
 
 @pytest.fixture()
