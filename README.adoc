@@ -1,16 +1,27 @@
 = cloudatcost-ansible-module
 
-These are additional, unofficial Ansible modules for managing servers at http://cloudatcost.com[CloudAtCost
-]
+These are additional, unofficial Ansible modules for managing servers at http://cloudatcost.com[CloudAtCost]
 
 == Installation
+
+=== Package Contents
+cac_server.py -- Module for managing cloudatcost servers in your playbooks
+cac_inv.py -- Cloudatcost Inventory script
 
 === In a virtualenv
 [bash]
 ```
- sudo pip install cloudatcost-ansible-module
+ git clone https://github.com/sage905/cloudatcost-ansible-module
+ cd cloudatcost-ansible-module
+ pip install cloudatcost-ansible-module
 ```
 === Directly in playbook directory
+[bash]
+```
+ git clone https://github.com/sage905/cloudatcost-ansible-module
+ ln -s $PWD/cloudatcost-ansible-module/cloudatcost-ansible-module/cac_server.py /path/to/your/ansible/library
+ ln -s $PWD/cloudatcost-ansible-module/cac_inv.py /path/to/your/inventory/directory
+```
 
 === Dependencies
 This module depends on the https://github.com/adc4392/python-cloudatcost[python-cloudatcost] module.
@@ -29,4 +40,68 @@ export CAC_API_KEY=apikeygeneratedbypanel
 export CAC_API_USER=username@domain.com
 ```
 
+=== Examples
 
+==== Create a server
+```
+- local_action:
+     module: cac_server
+     api_user: bob@smith.com
+     api_key: 'longStringFromCACApi'
+     label: cloudatcost-test1
+     cpus: 1
+     ram: 1024
+     storage: 10
+     template_id: 26
+     runmode: safe
+     wait: yes
+     wait_timeout: 3600
+     state: present
+```
+
+==== Ensure a running server (create if missing)
+```
+- local_action:
+     module: cac_server
+     api_user: bob@smith.com
+     api_key: 'longStringFromCaCAPI'
+     label: cloudatcost-test1
+     cpus: 1
+     ram: 1024
+     storage: 10
+     template_id: 26
+     runmode: safe
+     wait: yes
+     wait_timeout: 3600
+     state: present
+```
+
+==== Delete a server
+```
+- local_action:
+     module: cac_server
+     api_user: bob@smith.com
+     api_key: 'longStringFromCaCAPI'
+     sid: 12345678
+     label: cloudatcost-test1
+     state: absent
+```
+
+==== Stop a server
+```
+- local_action:
+     module: cac_server
+     api_user: bob@smith.com
+     api_key: 'longStringFromCaCAPI'
+     label: cloudatcost-test1
+     state: stopped
+```
+==== Reboot a server
+```
+- local_action:
+     module: cac_server
+     api_user: bob@smith.com
+     api_key: 'longStringFromCaCAPI'
+     label: cloudatcost-test1
+     state: restarted
+```

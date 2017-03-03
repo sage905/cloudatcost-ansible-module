@@ -1,7 +1,6 @@
 #!/usr/bin/python
 # Custom Module to manage server instances in a CloudAtCost
 # (https://cloudatcost.com) Cloud
-# This module was originally based on the Ansible Linode module
 from collections import namedtuple, defaultdict, MutableMapping
 import string
 
@@ -9,8 +8,8 @@ from ansible.module_utils.basic import *
 
 DOCUMENTATION = '''
 ---
-module: cloudatcost
-author: "Patrick Toal (@ptoal)"
+module: cac_server
+author: "Patrick Toal (@sage905)"
 short_description: Create, Delete, Start, Stop, Restart or Update an instance at CloudAtCost
 description: >
     Manage servers at CloudAtCost via the API:
@@ -59,7 +58,7 @@ options:
      - Amount of RAM to allocate to this instance (MB)
     default: 1024
     type: integer
-    choices: [1024, 2048, 3072, 4096, 6144, 7168, 8192, 12288, 16384, 20480, 24576, 28672, 32768]
+    choices: [512, 1024, 2048, 3072, 4096, 6144, 7168, 8192, 12288, 16384, 20480, 24576, 28672, 32768]
   storage:
     description:
      - Amount of Disk Storage to allocate to this instance (GB)
@@ -79,8 +78,8 @@ options:
     choices: ["safe", "normal"]
   wait:
     description:
-     - wait for the instance to be in state 'running' before returning
-    default: "yes"
+     - wait for the instance to be powered on before returning
+    default: "no"
     choices: [ "yes", "no" ]
   wait_timeout:
     description:
@@ -116,7 +115,7 @@ EXAMPLES = '''
 ---
 # Create a server
 - local_action:
-     module: cloudatcost
+     module: cac_server
      api_user: bob@smith.com
      api_key: 'longStringFromCACApi'
      label: cloudatcost-test1
@@ -131,9 +130,9 @@ EXAMPLES = '''
 
 # Ensure a running server (create if missing)
 - local_action:
-     module: cloudatcost
+     module: cac_server
      api_user: bob@smith.com
-     api_key: 'longStringFromLinodeApi'
+     api_key: 'longStringFromCaCAPI'
      label: cloudatcost-test1
      cpus: 1
      ram: 1024
@@ -146,26 +145,26 @@ EXAMPLES = '''
 
 # Delete a server
 - local_action:
-     module: cloudatcost
+     module: cac_server
      api_user: bob@smith.com
-     api_key: 'longStringFromLinodeApi'
+     api_key: 'longStringFromCaCAPI'
      sid: 12345678
      label: cloudatcost-test1
      state: absent
 
 # Stop a server
 - local_action:
-     module: cloudatcost
+     module: cac_server
      api_user: bob@smith.com
-     api_key: 'longStringFromLinodeApi'
+     api_key: 'longStringFromCaCAPI'
      label: cloudatcost-test1
      state: stopped
 
 # Reboot a server
 - local_action:
-     module: cloudatcost
+     module: cac_server
      api_user: bob@smith.com
-     api_key: 'longStringFromLinodeApi'
+     api_key: 'longStringFromCaCAPI'
      label: cloudatcost-test1
      state: restarted
 

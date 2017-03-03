@@ -1,5 +1,4 @@
 import pytest
-import time
 
 from cloudatcost_ansible_module.cac_server import CACTemplate, get_server, CACServer, CacApiError
 from cloudatcost_ansible_module import cac_server as cac_server
