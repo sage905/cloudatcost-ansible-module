@@ -204,9 +204,8 @@ def get_server(api, server_id=None, label=None, server_name=None):
     assert server_id is not None or label is not None or server_name is not None
 
     try:
-        servers = api.get_server_info().get('data')
         server = next(
-            server for server in servers if
+            server for server in api.get_server_info().get('data') if
             server['sid'] == str(server_id) or server['servername'] == server_name or server['label'] == label)
     except StopIteration:
         return None
@@ -355,6 +354,7 @@ class CACServer(MutableMapping):
             server = get_server(api, server_name=servername)
             if server and server['status'] == status:
                 return server
+
         return f
 
     @staticmethod
@@ -398,19 +398,19 @@ class CACServer(MutableMapping):
         # some time to boot.
 
         # Queue the build
+        server = None
+
         response = api.server_build(cpu, ram, disk, os_template.template_id)
         if response.get('result') == 'successful':
-            # Wait up to 10s for the server to show up in listservers.
-            server = _poller(lambda: get_server(api, server_name=response['servername']), 10)
-            # Set the label, so we can find it again in the future
-            if server:
-                server['label'] = label
-                server.commit()
             # Optionally wait for the server to be Powered On.  Poll every 10s.
             if wait:
                 server = _poller(CACServer.check_server_status(api, response.get('servername'), 'Powered On'),
                                  wait_timeout, 10)
-            return server
+                # Set the label, so we can find it again in the future
+                if server:
+                    server['label'] = label
+                    server.commit()
+            return server, response
         else:
             raise CacApiError(string.Formatter().vformat("Server Build Failed. Status: {status} "
                                                          "#{error}, \"{error_description}\" ",
@@ -462,6 +462,7 @@ def main():
         module.fail_json(msg='CACPy required for this module')
 
     changed = False
+    response = None
 
     state = module.params.get('state')
     label = module.params.get('label')
@@ -485,12 +486,16 @@ def main():
         else:
             # For any other state, we need a server object.
             if not server:
-                server = CACServer.build_server(api, cpus, ram, storage, template, label, wait, wait_timeout)
-                if server:
+                server, response = CACServer.build_server(api, cpus, ram, storage, template, label, wait, wait_timeout)
+                if response['result'] == "successful":
                     changed = True
                 else:
-                    raise RuntimeError("Build initiated but no server was returned.  Check CloudAtCost Panel.  You "
-                                       "will need to manually set the server label in the panel before trying again.")
+                    module.fail_json(msg="Build initiated but no server was returned.  Check CloudAtCost Panel.  You "
+                                         "will need to manually set the server label in the panel before trying again."
+                                         "Response: %s" % response)
+            if not server:
+                # We didn't wait for it to build, or it timed out
+                module.exit_json(changed=True, server=None, response = response)
 
             if state in ('present', 'active', 'started'):
                 server['status'] = 'Powered On'
@@ -515,7 +520,7 @@ def main():
                 changed = True
                 server = updated
 
-        module.exit_json(changed=changed, server=server)
+        module.exit_json(changed=changed, server=server, response=response)
 
     except Exception as e:
         module.fail_json(msg='%s' % e.message)

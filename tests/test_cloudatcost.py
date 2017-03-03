@@ -122,7 +122,6 @@ class TestServerClass(object):
         assert server
         assert call.server_build(1, 1024, 10, '27') in mock_cac_api.method_calls
 
-
     @pytest.mark.usefixtures('patch_sleep')
     def test_server_build_with_wait(self, mock_cac_api):
         mock_cac_api.get_server_info.side_effect = simulated_build()
