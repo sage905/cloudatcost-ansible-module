@@ -5,8 +5,10 @@ These are additional, unofficial Ansible modules for managing servers at http://
 == Installation
 
 === Package Contents
-cac_server.py -- Module for managing cloudatcost servers in your playbooks
-cac_inv.py -- Cloudatcost Inventory script
+cac_server.py::
+ Module for managing cloudatcost servers in your playbooks
+cac_inv.py::
+ Cloudatcost Inventory script
 
 === In a virtualenv
 [bash]
