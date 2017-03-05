@@ -216,7 +216,7 @@ def get_server(api, server_id=None, label=None, server_name=None):
 def check_ok(response):
     """ Verify that the API Call has an 'ok' status. """
     if response['status'] != 'ok':
-        raise CacApiError('CloudAtCost API call failed. Status: ' + response['status'])
+        raise CacApiError('CloudAtCost API call failed. Status: %s' % response)
     return True
 
 
