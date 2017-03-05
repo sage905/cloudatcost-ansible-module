@@ -487,13 +487,16 @@ def main():
         else:
             # For any other state, we need a server object.
             if not server:
-                server, response = CACServer.build_server(api, cpus, ram, storage, template, label, wait, wait_timeout)
-                if response['result'] == "successful":
+                if module.check_mode:
                     changed = True
                 else:
-                    module.fail_json(msg="Build initiated but no server was returned.  Check CloudAtCost Panel.  You "
-                                         "will need to manually set the server label in the panel before trying again."
-                                         "Response: %s" % response)
+                    server, response = CACServer.build_server(api, cpus, ram, storage, template, label, wait, wait_timeout)
+                    if response['result'] == "successful":
+                        changed = True
+                    else:
+                        module.fail_json(msg="Build initiated but no server was returned.  Check CloudAtCost Panel.  You "
+                                             "will need to manually set the server label in the panel before trying again."
+                                             "Response: %s" % response)
             if not server:
                 # We didn't wait for it to build, or it timed out
                 module.exit_json(changed=True, server=None, response = response)
