@@ -429,6 +429,7 @@ def get_api(api_user, api_key):
             "api user from paramater or CAC_API_USER environment variable"))
 
     api = CACPy(api_user, api_key)
+
     check_ok(api.get_resources())
     return api
 
@@ -440,8 +441,8 @@ def main():
                        choices=['active', 'present', 'started',
                                 'deleted', 'absent', 'stopped',
                                 'restarted']),
-            api_key=dict(),
-            api_user=dict(),
+            api_key=dict(type='str'),
+            api_user=dict(type='str'),
             label=dict(type='str', aliases=['name']),
             fqdn=dict(type='str'),
             cpus=dict(type='int'),
@@ -477,7 +478,7 @@ def main():
     wait_timeout = int(module.params.get('wait_timeout'))
 
     try:
-        api = get_api(module.params.get('api_key'), module.params.get('api_user'))
+        api = get_api(module.params.get('api_user'), module.params.get('api_key'))
         server = get_server(api, server_id=server_id, label=label)
 
         if state in ('absent', 'deleted'):
