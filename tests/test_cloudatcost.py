@@ -71,9 +71,9 @@ class TestServerClass(object):
 
     def test_update_mode(self, mock_cac_api):
         server = get_server(mock_cac_api, 123456789)
-        server['mode'] = "normal"
+        server['mode'] = "safe"
         server.commit()
-        assert call.set_run_mode(run_mode='normal', server_id='123456789') in mock_cac_api.method_calls
+        assert call.set_run_mode(run_mode='safe', server_id='123456789') in mock_cac_api.method_calls
 
     def test_power_off_state(self, mock_cac_api):
         server = get_server(mock_cac_api, 123456789)
@@ -161,14 +161,14 @@ class TestAnsibleModule(object):
 
     def test_module_updates_runmode(self, capsys):
         set_module_args(dict(api_user="test@guy.com", api_key="secret", server_id=123456789,
-                             runmode="normal", state='present'))
+                             runmode="safe", state='present'))
         pytest.raises(SystemExit, cac_server.main)
         out, err = capsys.readouterr()
         output = json.loads(out)
         assert output['changed'] is True
         api = cac_server.get_api('', '')
         api.set_run_mode.assert_has_calls(
-            [call.set_run_mode(run_mode='normal', server_id='123456789'), ], any_order=True)
+            [call.set_run_mode(run_mode='safe', server_id='123456789'), ], any_order=True)
 
     def test_module_updates_status(self, capsys):
         set_module_args(dict(api_user="test@guy.com", api_key="secret", server_id=123456789,

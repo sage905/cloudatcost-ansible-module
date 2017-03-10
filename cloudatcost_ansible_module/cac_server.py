@@ -448,7 +448,7 @@ def main():
             cpus=dict(type='int'),
             ram=dict(type='int'),
             storage=dict(type='int'),
-            template=dict(type='int'),
+            template=dict(),
             runmode=dict(type='str'),
             server_id=dict(type='int', aliases=['sid']),
             wait=dict(type='bool', default=False),
@@ -513,7 +513,9 @@ def main():
             if rdns:
                 server['rdns'] = rdns
             if runmode:
-                server['mode'] = runmode
+                # runmode reports as "Normal" or "Safe", but the api only accepts "normal", or "safe"
+                if server['mode'].lower() != runmode.lower():
+                    server['mode'] = runmode.lower()
 
         if module.check_mode:
             changed = server.check()
